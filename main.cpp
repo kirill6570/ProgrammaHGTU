@@ -11,7 +11,7 @@ bool isVowel(wchar_t ch) {
     return vowels.find(ch) != wstring::npos;
 }
 
-int main() {
+int main() {    
     locale loc("ru_RU.utf8");
     locale::global(loc);
     wcin.imbue(loc);
@@ -49,3 +49,5 @@ int main() {
 
     return 0;
 }
+//cегодня гулял получается
+
