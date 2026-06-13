@@ -1,43 +1,54 @@
-#include "crypto_interface.h"
-#include <cstring>
-#include <array>
+#include "rc4.h"
+#include <fstream>
 
-static AlgorithmInfo info = {"rc4", 16};
+using namespace std;
 
-extern "C" const AlgorithmInfo* get_algorithm_info() {
-    return &info;
-}
-
-extern "C" size_t get_output_size(size_t input_size, int operation_type) {
-    return input_size;
-}
-
-extern "C" int encrypt(ConstBuffer key, ConstBuffer input, MutBuffer* output) {
-    if (output->size < input.size) return -1;
-    if (key.size != 16) return -1;
-    
-    std::array<uint8_t, 256> S;
+string rc4Crypt(const string &text, const string &key) {
+    int S[256];
     for (int i = 0; i < 256; i++) S[i] = i;
-    
-    uint8_t j = 0;
+
+    int j = 0;
     for (int i = 0; i < 256; i++) {
-        j = j + S[i] + key.data[i % key.size];
-        std::swap(S[i], S[j]);
+        j = (j + S[i] + key[i % key.size()]) % 256;
+        int tmp = S[i]; S[i] = S[j]; S[j] = tmp;
     }
-    
-    uint8_t i = 0;
-    j = 0;
-    for (size_t n = 0; n < input.size; n++) {
-        i++;
-        j += S[i];
-        std::swap(S[i], S[j]);
-        uint8_t K = S[(S[i] + S[j]) % 256];
-        output->data[n] = input.data[n] ^ K;
+
+    string result = text;
+    int i = 0; j = 0;
+    for (size_t k = 0; k < text.size(); k++) {
+        i = (i + 1) % 256;
+        j = (j + S[i]) % 256;
+        int tmp = S[i]; S[i] = S[j]; S[j] = tmp;
+        unsigned char keystream = S[(S[i] + S[j]) % 256];
+        result[k] = text[k] ^ keystream;
     }
-    
-    return 0;
+    return result;
 }
 
-extern "C" int decrypt(ConstBuffer key, ConstBuffer input, MutBuffer* output) {
-    return encrypt(key, input, output);
+string rc4Encrypt(const string &text, const string &key) {
+    return rc4Crypt(text, key);
+}
+
+string rc4Decrypt(const string &text, const string &key) {
+    return rc4Crypt(text, key);
+}
+
+void rc4EncryptFile(const string &inFile, const string &outFile, const string &key) {
+    ifstream in(inFile, ios::binary);
+    ofstream out(outFile, ios::binary);
+    string content;
+    char ch;
+    while (in.get(ch)) content += ch;
+    string result = rc4Encrypt(content, key);
+    out.write(result.data(), result.size());
+}
+
+void rc4DecryptFile(const string &inFile, const string &outFile, const string &key) {
+    ifstream in(inFile, ios::binary);
+    ofstream out(outFile, ios::binary);
+    string content;
+    char ch;
+    while (in.get(ch)) content += ch;
+    string result = rc4Decrypt(content, key);
+    out.write(result.data(), result.size());
 }
