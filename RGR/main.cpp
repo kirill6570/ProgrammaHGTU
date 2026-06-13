@@ -1,213 +1,228 @@
 #include <iostream>
-#include <limits>
 #include <fstream>
-#include <cstdlib>
-#include <ctime>
-
-#ifdef _WIN32
-    #include <windows.h>
-#else
-    #include <dlfcn.h>
-#endif
+#include <string>
+#include <vector>
+#include <filesystem>
+#include <dlfcn.h>
+#include <random>
+#include <cstring>
 
 using namespace std;
+namespace fs = filesystem;
 
-enum class Menu { EXIT = 0, CAESAR = 1, RSA = 2, PLAYFAIR = 3, POLYBIUS = 4,
-                  HILL = 5, TRANSPOS = 6, RC4 = 7, TEA = 8, GENKEY = 9 };
+struct Buf { const unsigned char* d; size_t s; };
+struct MBuf { unsigned char* d; size_t s; };
+struct Info { const char* n; size_t ks; };
 
-#ifdef _WIN32
-    #define LOAD_LIB(path)    LoadLibrary(path)
-    #define GET_FUNC(h, name) GetProcAddress((HMODULE)h, name)
-    #define CLOSE_LIB(h)      FreeLibrary((HMODULE)h)
-    #define LIB_EXT           ".dll"
-#else
-    #define LOAD_LIB(path)    dlopen(path, RTLD_LAZY)
-    #define GET_FUNC(h, name) dlsym(h, name)
-    #define CLOSE_LIB(h)      dlclose(h)
-    #define LIB_EXT           ".so"
-#endif
+// enum class для выбора алгоритмов
+enum class Algo {
+    EXIT = 0,
+    CAESAR = 1,
+    RSA = 2,
+    RC4 = 3,
+    TEA = 4
+};
 
-void showMenu() {
-    cout << "\n         RGR - kriptaKruto" << endl;
-    cout << " 1 - Шифр Цезаря" << endl;
-    cout << " 2 - RSA" << endl;
-    cout << " 3 - Плейфер" << endl;
-    cout << " 4 - Полибий" << endl;
-    cout << " 5 - Хилл" << endl;
-    cout << " 6 - Двойная перестановка" << endl;
-    cout << " 7 - RC4" << endl;
-    cout << " 8 - TEA" << endl;
-    cout << " 9 - Генератор ключей" << endl;
-    cout << " 0 - Выход" << endl;
-    cout << ">> ";
+// Глобальные указатели для библиотек
+static void* lib_handle = nullptr;
+static const Info* (*lib_get_info)() = nullptr;
+static size_t (*lib_out_size)(size_t, int) = nullptr;
+static int (*lib_enc)(Buf, Buf, MBuf*) = nullptr;
+static int (*lib_dec)(Buf, Buf, MBuf*) = nullptr;
+
+// Поиск всех алгоритмов в crypto_modules/
+vector<string> find_algorithms() {
+    vector<string> algos;
+    string path = "crypto_modules";
+    if (!fs::exists(path)) return algos;
+    
+    for (const auto& entry : fs::directory_iterator(path)) {
+        if (entry.is_directory()) {
+            string name = entry.path().filename().string();
+            string so_file = path + "/" + name + "/" + name + ".so";
+            if (fs::exists(so_file)) {
+                algos.push_back(name);
+            }
+        }
+    }
+    return algos;
 }
 
-void generateKeys() {
-    int ch;
-    cout << "\n=== ГЕНЕРАТОР КЛЮЧЕЙ ===" << endl;
-    showMenu();  
-    cin >> ch;
-    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+// Загрузка библиотеки
+bool load_algorithm(const string& algo) {
+    if (lib_handle) dlclose(lib_handle);
+    lib_handle = nullptr;
+    
+    string lib_path = "crypto_modules/" + algo + "/" + algo + ".so";
+    lib_handle = dlopen(lib_path.c_str(), RTLD_LAZY);
+    if (!lib_handle) return false;
+    
+    lib_get_info = (const Info*(*)())dlsym(lib_handle, "get_info");
+    lib_out_size = (size_t(*)(size_t,int))dlsym(lib_handle, "out_size");
+    lib_enc = (int(*)(Buf,Buf,MBuf*))dlsym(lib_handle, "enc");
+    lib_dec = (int(*)(Buf,Buf,MBuf*))dlsym(lib_handle, "dec");
+    
+    if (!lib_get_info || !lib_out_size || !lib_enc || !lib_dec) {
+        dlclose(lib_handle);
+        lib_handle = nullptr;
+        return false;
+    }
+    return true;
+}
 
-    switch (ch) {
-    case 1: { int s = rand() % 25 + 1; cout << "Сдвиг: " << s << endl; break; }
-    case 2: {
-        long long p, q; cout << "p, q: "; cin >> p >> q;
-        long long N = p * q, phi = (p-1)*(q-1);
-        long long d = 2; while (d < phi) { long long a=d,b=phi; while(b){long long t=a%b;a=b;b=t;} if(a==1)break; d++; }
-        long long c = 1; while ((d*c)%phi != 1) c++;
-        cout << "N=" << N << "\n(d,N)=(" << d << "," << N << ")\n(c,N)=(" << c << "," << N << ")" << endl;
-        break;
+// Шифр Цезаря (встроенный)
+string caesar_crypt(string text, int shift, int mode) {
+    string res = "";
+    if (mode == 2) shift = -shift;
+    for (char c : text) {
+        if (c >= 'a' && c <= 'z')
+            res += char(((c - 'a' + shift) % 26 + 26) % 26 + 'a');
+        else if (c >= 'A' && c <= 'Z')
+            res += char(((c - 'A' + shift) % 26 + 26) % 26 + 'A');
+        else
+            res += c;
     }
-    case 3: { string k[]={"KEY","SECRET","CRYPTO","CIPHER","MATRIX"}; cout << "Ключ: " << k[rand()%5] << endl; break; }
-    case 4: { cout << "Без ключа." << endl; break; }
-    case 5: { char a='a'+rand()%26,b='a'+rand()%26,c='a'+rand()%26,d='a'+rand()%26; cout << "Ключ: "<<a<<b<<c<<d<<endl; break; }
-    case 6: { cout << "Ключ: " << rand()%9000+1000 << endl; break; }
-    case 7: { string s="abcdefghijklmnopqrstuvwxyz0123456789",k; for(int i=0;i<8;i++)k+=s[rand()%s.size()]; cout<<"Ключ: "<<k<<endl; break; }
-    case 8: { string s="abcdefghijklmnopqrstuvwxyz0123456789",k; for(int i=0;i<16;i++)k+=s[rand()%s.size()]; cout<<"Ключ: "<<k<<endl; break; }
+    return res;
+}
+
+// Общая функция для библиотечных алгоритмов
+string process_lib(const string& text, const string& key_file, int mode, const string& algo) {
+    if (!load_algorithm(algo)) {
+        return "Ошибка: библиотека " + algo + " не загружена";
     }
+    
+    vector<unsigned char> key;
+    if (!key_file.empty()) {
+        ifstream f(key_file, ios::binary);
+        if (f) key = vector<unsigned char>((istreambuf_iterator<char>(f)), {});
+    }
+    
+    vector<unsigned char> input(text.begin(), text.end());
+    size_t out_sz = lib_out_size(input.size(), mode == 1 ? 0 : 1);
+    vector<unsigned char> output(out_sz);
+    
+    Buf k = {key.data(), key.size()};
+    Buf in = {input.data(), input.size()};
+    MBuf out = {output.data(), output.size()};
+    
+    int ret;
+    if (mode == 1) ret = lib_enc(k, in, &out);
+    else ret = lib_dec(k, in, &out);
+    
+    if (ret != 0) return "Ошибка операции";
+    
+    return string(output.begin(), output.end());
+}
+
+void print_algo_menu() {
+    cout << "\nВыберите алгоритм:\n";
+    cout << "1. Цезарь\n";
+    cout << "2. RSA\n";
+    cout << "3. RC4\n";
+    cout << "4. TEA\n";
+    cout << "0. Назад\n";
+    cout << "> ";
 }
 
 int main() {
-    srand(time(0));
-    int choice;
-
+    int choice, op, algo_choice;
+    string text, key, infile, outfile;
+    
     while (true) {
-        showMenu();
+        cout << "\n===== CRIPTAKRUTO =====\n";
+        cout << "1. Шифрование/дешифрование текста\n";
+        cout << "2. Шифрование/дешифрование файла\n";
+        cout << "0. Выход\n";
+        cout << "=======================\n";
+        cout << "> ";
         cin >> choice;
-        cin.ignore(numeric_limits<streamsize>::max(), '\n');
-        if (choice == 0) { cout << "До свидания!" << endl; return 0; }
-
-        if (choice == 9) { generateKeys(); continue; }
-
-        Menu m = static_cast<Menu>(choice);
-
-        cout << "\nРежим: 1 - Текст | 2 - Файл: ";
-        int mode; cin >> mode;
-        cin.ignore(numeric_limits<streamsize>::max(), '\n');
-
-        string text, key, lib, encName, decName;
-
-        switch (m) {
-            case Menu::CAESAR:   lib="./modules/libcaesar" LIB_EXT; encName="caesarEncrypt"; decName="caesarDecrypt"; break;
-            case Menu::RSA:      lib="./modules/librsa" LIB_EXT; encName="rsaEncrypt"; decName="rsaDecrypt"; break;
-            case Menu::PLAYFAIR: lib="./modules/libplayfair" LIB_EXT; encName="playfairEncrypt"; decName="playfairDecrypt"; break;
-            case Menu::POLYBIUS: lib="./modules/libpolybius" LIB_EXT; encName="polybiusEncrypt"; decName="polybiusDecrypt"; break;
-            case Menu::HILL:     lib="./modules/libhill" LIB_EXT; encName="hillEncrypt"; decName="hillDecrypt"; break;
-            case Menu::TRANSPOS: lib="./modules/libtranspos" LIB_EXT; encName="transposEncrypt"; decName="transposDecrypt"; break;
-            case Menu::RC4:      lib="./modules/librc4" LIB_EXT; encName="rc4Crypt"; decName="rc4Crypt"; break;
-            case Menu::TEA:      lib="./modules/libtea" LIB_EXT; encName="teaEncrypt"; decName="teaDecrypt"; break;
-            default: continue;
+        cin.ignore();
+        
+        if (choice == 0) break;
+        
+        if (choice != 1 && choice != 2) {
+            cout << "Неверный выбор\n";
+            continue;
         }
-
-        void* handle = LOAD_LIB(lib.c_str());
-        if (!handle) { cout << "Ошибка загрузки " << lib << endl; continue; }
-
-        if (mode == 1) { cout << "Текст: "; getline(cin, text); }
-        else { cout << "Входной файл: "; getline(cin, text); cout << "Выходной файл: "; getline(cin, key); }
-
-        cout << "Операция: 1 - Шифровать | 2 - Расшифровать: ";
-        int op; cin >> op;
-        cin.ignore(numeric_limits<streamsize>::max(), '\n');
-
-        if (m == Menu::CAESAR) {
-            typedef string (*F)(const string&, int);
-            F enc = (F)GET_FUNC(handle, encName.c_str());
-            F dec = (F)GET_FUNC(handle, decName.c_str());
-            int shift; cout << "Сдвиг: "; cin >> shift;
-
-            if (mode == 1) {
-                cout << (op == 1 ? enc(text, shift) : dec(text, shift)) << endl;
+        
+        print_algo_menu();
+        cin >> algo_choice;
+        cin.ignore();
+        
+        Algo a = static_cast<Algo>(algo_choice);
+        
+        if (a == Algo::EXIT) continue;
+        if (algo_choice < 1 || algo_choice > 4) {
+            cout << "Неверный выбор\n";
+            continue;
+        }
+        
+        // Получаем строковое имя алгоритма
+        string algo_name;
+        switch (a) {
+            case Algo::CAESAR: algo_name = "caesar"; break;
+            case Algo::RSA:    algo_name = "rsa"; break;
+            case Algo::RC4:    algo_name = "rc4"; break;
+            case Algo::TEA:    algo_name = "tea"; break;
+            default: break;
+        }
+        
+        if (choice == 1) {
+            // Текст
+            cout << "Введите текст: ";
+            getline(cin, text);
+            cout << "Введите ключ (файл): ";
+            getline(cin, key);
+            cout << "1 - Шифровать, 2 - Дешифровать: ";
+            cin >> op;
+            cin.ignore();
+            
+            string result;
+            if (a == Algo::CAESAR) {
+                int shift = 3;
+                if (!key.empty()) shift = stoi(key);
+                result = caesar_crypt(text, shift, op);
             } else {
-                ifstream in(text, ios::binary); ofstream out(key, ios::binary);
-                string c; char ch; while (in.get(ch)) c += ch;
-                string r = (op == 1) ? enc(c, shift) : dec(c, shift);
-                for (size_t i = 0; i < r.size(); i++) out.put(r[i]);
-                cout << "Готово: " << key << endl;
+                result = process_lib(text, key, op, algo_name);
             }
+            cout << "Результат: " << result << "\n";
         }
-        else if (m == Menu::RSA) {
-            typedef string (*F)(const string&, long long, long long);
-            F enc = (F)GET_FUNC(handle, encName.c_str());
-            F dec = (F)GET_FUNC(handle, decName.c_str());
-
-            if (mode == 1) {
-                if (op == 1) { long long d, N; cout << "d, N: "; cin >> d >> N; cout << enc(text, d, N) << endl; }
-                else { long long c, N; cout << "c, N: "; cin >> c >> N; cout << dec(text, c, N) << endl; }
+        else if (choice == 2) {
+            // Файл
+            cout << "Входной файл: ";
+            getline(cin, infile);
+            cout << "Выходной файл: ";
+            getline(cin, outfile);
+            cout << "Введите ключ (файл): ";
+            getline(cin, key);
+            cout << "1 - Шифровать, 2 - Дешифровать: ";
+            cin >> op;
+            cin.ignore();
+            
+            ifstream f(infile, ios::binary);
+            if (!f) {
+                cout << "Ошибка открытия файла\n";
+                continue;
+            }
+            string content((istreambuf_iterator<char>(f)), {});
+            f.close();
+            
+            string result;
+            if (a == Algo::CAESAR) {
+                int shift = 3;
+                if (!key.empty()) shift = stoi(key);
+                result = caesar_crypt(content, shift, op);
             } else {
-                ifstream in(text, ios::binary); ofstream out(key, ios::binary);
-                string ct; char ch; while (in.get(ch)) ct += ch;
-                if (op == 1) { long long d, N; cout << "d, N: "; cin >> d >> N; out << enc(ct, d, N); }
-                else { long long c, N; cout << "c, N: "; cin >> c >> N; out << dec(ct, c, N); }
-                cout << "Готово: " << key << endl;
+                result = process_lib(content, key, op, algo_name);
             }
+            
+            ofstream fout(outfile, ios::binary);
+            fout << result;
+            fout.close();
+            cout << "Готово! Результат в " << outfile << "\n";
         }
-        else if (m == Menu::PLAYFAIR || m == Menu::HILL || m == Menu::TRANSPOS) {
-            typedef string (*F)(const string&, const string&);
-            F enc = (F)GET_FUNC(handle, encName.c_str());
-            F dec = (F)GET_FUNC(handle, decName.c_str());
-            string k; cout << "Ключ: "; getline(cin, k);
-
-            if (mode == 1) {
-                cout << (op == 1 ? enc(text, k) : dec(text, k)) << endl;
-            } else {
-                ifstream in(text, ios::binary); ofstream out(key, ios::binary);
-                string ct; char ch; while (in.get(ch)) ct += ch;
-                string r = (op == 1) ? enc(ct, k) : dec(ct, k);
-                for (size_t i = 0; i < r.size(); i++) out.put(r[i]);
-                cout << "Готово: " << key << endl;
-            }
-        }
-        else if (m == Menu::POLYBIUS) {
-            typedef string (*F)(const string&);
-            F enc = (F)GET_FUNC(handle, encName.c_str());
-            F dec = (F)GET_FUNC(handle, decName.c_str());
-
-            if (mode == 1) {
-                cout << (op == 1 ? enc(text) : dec(text)) << endl;
-            } else {
-                ifstream in(text, ios::binary); ofstream out(key, ios::binary);
-                string ct; char ch; while (in.get(ch)) ct += ch;
-                string r = (op == 1) ? enc(ct) : dec(ct);
-                for (size_t i = 0; i < r.size(); i++) out.put(r[i]);
-                cout << "Готово: " << key << endl;
-            }
-        }
-        else if (m == Menu::RC4) {
-            typedef string (*F)(const string&, const string&);
-            F enc = (F)GET_FUNC(handle, encName.c_str());
-            string k; cout << "Ключ: "; getline(cin, k);
-
-            if (mode == 1) {
-                string r = enc(text, k);
-                if (op == 1) { cout << "hex: "; for (size_t i = 0; i < r.size(); i++) cout << hex << (int)(unsigned char)r[i] << " "; cout << dec << endl; }
-                else cout << r << endl;
-            } else {
-                ifstream in(text, ios::binary); ofstream out(key, ios::binary);
-                string ct; char ch; while (in.get(ch)) ct += ch;
-                string r = enc(ct, k);
-                for (size_t i = 0; i < r.size(); i++) out.put(r[i]);
-                cout << "Готово: " << key << endl;
-            }
-        }
-        else if (m == Menu::TEA) {
-            typedef string (*F)(const string&, const string&);
-            F enc = (F)GET_FUNC(handle, encName.c_str());
-            F dec = (F)GET_FUNC(handle, decName.c_str());
-            string k; cout << "Ключ: "; getline(cin, k);
-
-            if (mode == 1) {
-                if (op == 1) { string r = enc(text, k); cout << "hex: "; for (size_t i = 0; i < r.size(); i++) cout << hex << (int)(unsigned char)r[i] << " "; cout << dec << endl; }
-                else cout << dec(text, k) << endl;
-            } else {
-                ifstream in(text, ios::binary); ofstream out(key, ios::binary);
-                string ct; char ch; while (in.get(ch)) ct += ch;
-                string r = (op == 1) ? enc(ct, k) : dec(ct, k);
-                for (size_t i = 0; i < r.size(); i++) out.put(r[i]);
-                cout << "Готово: " << key << endl;
-            }
-        }
-
-        CLOSE_LIB(handle);
     }
+    
+    if (lib_handle) dlclose(lib_handle);
+    return 0;
 }
